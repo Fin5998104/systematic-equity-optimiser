@@ -3,6 +3,9 @@
 An independent quantitative research project: a systematic long-only US-equity portfolio optimiser, validated with a 63-offset out-of-sample backtest over 2005–2026.
 
 The strategy uses cross-sectional return dispersion and interest-rate signals, conditioned on a macro regime gate, to adaptively tilt portfolio concentration. It has beaten both SPY and an equal-weight benchmark in every one of 63 tested quarterly rebalance start-days across a 21-year backtest covering four distinct market regimes.
+![Performance Dashboard](docs/dashboard.png)
+![Cumulative Performance Charts](docs/charts.png)
+![Portfolio Generation](docs/portfolio.png)
 
 ---
 
@@ -105,4 +108,4 @@ The backtest engine itself — the optimiser, 63-offset sweep runner, signal cal
 
 An independent quantitative research project by **Findlay Roberts**. BSc Economics, London School of Economics (2021). Built from scratch in Python — numpy, pandas, scipy, scikit-learn, LightGBM, Flask.
 
-Contact via [LinkedIn](#) <!-- replace # with your LinkedIn profile URL before committing -->.
+Contact via www.linkedin.com/in/findlay-roberts-701502216
