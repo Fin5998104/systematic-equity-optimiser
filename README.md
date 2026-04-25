@@ -3,8 +3,11 @@
 An independent quantitative research project: a systematic long-only US-equity portfolio optimiser, validated with a 63-offset out-of-sample backtest over 2005–2026.
 
 The strategy uses cross-sectional return dispersion and interest-rate signals, conditioned on a macro regime gate, to adaptively tilt portfolio concentration. It has beaten both SPY and an equal-weight benchmark in every one of 63 tested quarterly rebalance start-days across a 21-year backtest covering four distinct market regimes.
+
 ![Performance Dashboard](docs/dashboard.png)
+
 ![Cumulative Performance Charts](docs/charts.png)
+
 ![Portfolio Generation](docs/portfolio.png)
 
 ---
