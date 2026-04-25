@@ -40,7 +40,7 @@ Alpha versus SPY is positive in every era. Sharpe varies meaningfully by regime,
 
 **Universe.** Current S&P 500 + NASDAQ 100 constituents (~600 unique tickers). Survivorship bias is handled via Norgate's historical membership data — at each rebalance date, only stocks actually in the index on that date are eligible.
 
-**Training window.** 126 trading days (~6 months) of daily returns used to estimate the return/covariance structure at each rebalance.
+**Training window.** 126 trading days (~6 months) of daily returns, ending 21 trading days before each rebalance date. This 21-day embargo is a purged walk-forward design: it prevents leakage from short-horizon return autocorrelations — a real microstructure effect — that can inflate backtest performance without replicating out-of-sample. The effective look-back window is therefore 147 trading days, of which only the oldest 126 inform the optimisation.
 
 **Rebalancing.** Quarterly (63 trading days). The 63-offset sweep tests the strategy across every possible rebalance start-day within a quarter, producing 63 parallel backtests. This is the key robustness test: a single-path backtest reports one schedule, lucky or unlucky; 63 offsets reveal whether the strategy's edge depends on when you happened to start.
 
