@@ -29,24 +29,25 @@ warnings.filterwarnings('ignore')
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURATION (locked from final sweep)
+# CONFIGURATION (matches v3 production: sf_0_90.json)
 # ============================================================
-TRAIN_DAYS       = 147       # 7mo
-TEST_PERIOD      = 63        # quarterly
-ADAPT_STRENGTH   = 3.5
-RATE_STRENGTH    = 0.75
+TRAIN_DAYS       = 126       # 6mo training window
+TEST_PERIOD      = 63        # quarterly rebalance
+ADAPT_STRENGTH   = 7.0       # AS=7.0
 DISP_FLOOR       = 0.3
 DISP_CAP         = 1.0
 DISP_LOOKBACK    = 63
-RATE_LOOKBACK    = 6
-MAX_WEIGHT       = 1.0
+K_MAX            = 3.0       # cap on adaptive concentration
+MAX_WEIGHT       = 0.2       # 20% per-position cap
 MIN_STOCKS       = 20
-SPREAD_THRESHOLD = 1.2
+WINSOR_THRESHOLD = 0.15      # daily-return clip threshold (median method)
+SECTOR_FLOOR     = 0.9       # sf=0.90 - each sector >= 90% of SPY weight
 
 # Data paths
 DASHBOARD_DIR = os.path.expanduser('~/.norgate_dashboard')
 PRIMARY_PATH = os.path.join(DASHBOARD_DIR, 'primary.json')
 CHARTS_PATH = os.path.join(DASHBOARD_DIR, 'charts.json')
+SECTOR_CACHE_PATH = os.path.join(DASHBOARD_DIR, 'sector_cache.json')
 USER_STATE_DIR = os.path.expanduser('~/.portfolio_optimiser')
 os.makedirs(USER_STATE_DIR, exist_ok=True)
 
@@ -69,6 +70,17 @@ if os.path.exists(CHARTS_PATH):
 else:
     print(f"Warning: {CHARTS_PATH} not found - charts will be hidden "
           "(run build_charts.py to generate)")
+
+# Sector cache (optional): if present, enables sector-floor in live generate
+stock_sectors = {}
+if os.path.exists(SECTOR_CACHE_PATH):
+    with open(SECTOR_CACHE_PATH, 'r') as f:
+        stock_sectors = json.load(f)
+    print(f"Loaded sector cache for {len(stock_sectors)} tickers "
+          f"from {SECTOR_CACHE_PATH}")
+else:
+    print(f"Note: {SECTOR_CACHE_PATH} not found - live generate will run "
+          "without sector floor")
 
 # ============================================================
 # UNIVERSE - S&P 500 + NASDAQ 100 current constituents
@@ -148,6 +160,176 @@ def get_universe():
 # ============================================================
 # OPTIMISATION
 # ============================================================
+def apply_winsorization(train_data, threshold=WINSOR_THRESHOLD):
+    """Clip per-day returns to [median - threshold, median + threshold].
+    Median method with absolute threshold (e.g. 0.15 = clip to median +/- 15%).
+    Returns array with same shape as input."""
+    clipped = train_data.copy()
+    # For daily equity returns, median is ~0, so threshold ~ absolute bound
+    med = np.nanmedian(clipped)
+    lo = med - threshold
+    hi = med + threshold
+    return np.clip(clipped, lo, hi)
+
+
+# SPY sector weight snapshots - copied from backtest_layer7.py.
+# Used by apply_sector_floor to determine target sector weights at any date.
+SPY_SECTOR_SNAPSHOTS = {
+    2005: {'Information Technology': 15.1, 'Health Care': 13.3,
+           'Financials': 20.5, 'Consumer Discretionary': 11.0,
+           'Consumer Staples': 9.5, 'Industrials': 11.3,
+           'Energy': 9.3, 'Materials': 3.0, 'Utilities': 3.3,
+           'Communication Services': 3.2, 'Real Estate': 0.5},
+    2008: {'Information Technology': 15.3, 'Health Care': 14.8,
+           'Financials': 13.3, 'Consumer Discretionary': 8.4,
+           'Consumer Staples': 12.0, 'Industrials': 11.1,
+           'Energy': 13.0, 'Materials': 2.9, 'Utilities': 4.2,
+           'Communication Services': 3.8, 'Real Estate': 1.2},
+    2011: {'Information Technology': 19.0, 'Health Care': 11.9,
+           'Financials': 13.4, 'Consumer Discretionary': 10.7,
+           'Consumer Staples': 11.5, 'Industrials': 10.7,
+           'Energy': 12.3, 'Materials': 3.5, 'Utilities': 3.9,
+           'Communication Services': 3.1, 'Real Estate': 0.0},
+    2014: {'Information Technology': 19.7, 'Health Care': 14.2,
+           'Financials': 16.4, 'Consumer Discretionary': 12.1,
+           'Consumer Staples': 9.8, 'Industrials': 10.4,
+           'Energy': 8.4, 'Materials': 3.2, 'Utilities': 3.2,
+           'Communication Services': 2.3, 'Real Estate': 0.3},
+    2017: {'Information Technology': 23.8, 'Health Care': 13.8,
+           'Financials': 14.8, 'Consumer Discretionary': 12.2,
+           'Consumer Staples': 8.2, 'Industrials': 10.2,
+           'Energy': 6.1, 'Materials': 3.0, 'Utilities': 2.9,
+           'Communication Services': 2.1, 'Real Estate': 2.9},
+    2019: {'Information Technology': 23.2, 'Health Care': 14.2,
+           'Financials': 13.0, 'Consumer Discretionary': 9.8,
+           'Consumer Staples': 7.2, 'Industrials': 9.1,
+           'Energy': 4.3, 'Materials': 2.7, 'Utilities': 3.3,
+           'Communication Services': 10.4, 'Real Estate': 2.9},
+    2021: {'Information Technology': 27.6, 'Health Care': 13.3,
+           'Financials': 11.3, 'Consumer Discretionary': 12.5,
+           'Consumer Staples': 5.9, 'Industrials': 7.8,
+           'Energy': 2.7, 'Materials': 2.5, 'Utilities': 2.5,
+           'Communication Services': 10.2, 'Real Estate': 2.6},
+    2023: {'Information Technology': 28.8, 'Health Care': 13.1,
+           'Financials': 13.0, 'Consumer Discretionary': 10.8,
+           'Consumer Staples': 6.2, 'Industrials': 8.7,
+           'Energy': 3.9, 'Materials': 2.4, 'Utilities': 2.3,
+           'Communication Services': 8.6, 'Real Estate': 2.4},
+    2025: {'Information Technology': 31.5, 'Health Care': 10.1,
+           'Financials': 13.8, 'Consumer Discretionary': 10.5,
+           'Consumer Staples': 5.6, 'Industrials': 8.2,
+           'Energy': 3.0, 'Materials': 1.8, 'Utilities': 2.4,
+           'Communication Services': 9.4, 'Real Estate': 2.1},
+}
+
+
+def get_spy_sector_weights(date):
+    """Linear interpolation between annual SPY sector-weight snapshots."""
+    year = date.year + date.month / 12.0
+    years = sorted(SPY_SECTOR_SNAPSHOTS.keys())
+    if year <= years[0]:
+        return dict(SPY_SECTOR_SNAPSHOTS[years[0]])
+    if year >= years[-1]:
+        return dict(SPY_SECTOR_SNAPSHOTS[years[-1]])
+    for i in range(len(years) - 1):
+        y1, y2 = years[i], years[i + 1]
+        if y1 <= year <= y2:
+            frac = (year - y1) / (y2 - y1)
+            w1 = SPY_SECTOR_SNAPSHOTS[y1]
+            w2 = SPY_SECTOR_SNAPSHOTS[y2]
+            all_sectors = set(w1.keys()) | set(w2.keys())
+            return {s: (1 - frac) * w1.get(s, 0) + frac * w2.get(s, 0)
+                    for s in all_sectors}
+    return dict(SPY_SECTOR_SNAPSHOTS[years[-1]])
+
+
+def apply_sector_floor(w, tickers, sectors_map, date, floor_frac=SECTOR_FLOOR):
+    """Each sector >= floor_frac * SPY's sector weight at `date`.
+
+    Args:
+        w: (n,) array of weights, sums to 1
+        tickers: list of n ticker symbols (parallel to w)
+        sectors_map: dict {ticker: sector_name}
+        date: datetime for SPY weight lookup
+        floor_frac: e.g. 0.9 -> each sector >= 0.9 * SPY weight
+
+    Returns:
+        (w_new, fired): adjusted weights summing to 1, and bool
+        indicating whether any sector was at deficit.
+    """
+    if floor_frac <= 0 or not sectors_map:
+        return w, False
+
+    sectors = [sectors_map.get(t, 'Unclassified') for t in tickers]
+    unique_sectors = list(set(sectors))
+    sector_idx_map = {
+        s: np.array([j for j, sec in enumerate(sectors) if sec == s])
+        for s in unique_sectors
+    }
+
+    current_sector_w = {s: w[sector_idx_map[s]].sum()
+                        for s in unique_sectors}
+    spy_w = get_spy_sector_weights(date)
+
+    deficits, total_deficit = {}, 0.0
+    for s in unique_sectors:
+        if s == 'Unclassified':
+            continue
+        target = floor_frac * spy_w.get(s, 0) / 100.0
+        if current_sector_w[s] < target:
+            deficits[s] = target - current_sector_w[s]
+            total_deficit += deficits[s]
+
+    if total_deficit == 0:
+        return w, False
+
+    surplus, total_surplus = {}, 0.0
+    for s in unique_sectors:
+        if s == 'Unclassified' or s in deficits:
+            continue
+        target = floor_frac * spy_w.get(s, 0) / 100.0
+        above_floor = current_sector_w[s] - target
+        if above_floor > 0:
+            surplus[s] = above_floor
+            total_surplus += above_floor
+
+    unclass_idx = sector_idx_map.get('Unclassified', np.array([], dtype=int))
+    unclass_w = w[unclass_idx].sum() if len(unclass_idx) > 0 else 0.0
+    if unclass_w > 0:
+        surplus['Unclassified'] = unclass_w
+        total_surplus += unclass_w
+
+    if total_surplus <= 0:
+        return w, False
+
+    w_new = w.copy()
+    fill_ratio = min(1.0, total_surplus / total_deficit)
+    total_extracted = 0.0
+
+    for s, above in surplus.items():
+        reduction = above * fill_ratio * (total_deficit / total_surplus)
+        reduction_actual = min(reduction, above)
+        s_idx = sector_idx_map[s]
+        if w[s_idx].sum() > 0:
+            scale = 1.0 - reduction_actual / w[s_idx].sum()
+            w_new[s_idx] = w[s_idx] * scale
+            total_extracted += reduction_actual
+
+    for s, deficit in deficits.items():
+        boost_actual = total_extracted * (deficit / total_deficit)
+        s_idx = sector_idx_map[s]
+        if w[s_idx].sum() > 0:
+            scale = (w[s_idx].sum() + boost_actual) / w[s_idx].sum()
+            w_new[s_idx] = w[s_idx] * scale
+        elif len(s_idx) > 0:
+            w_new[s_idx] = boost_actual / len(s_idx)
+
+    total = w_new.sum()
+    if total > 0:
+        w_new = w_new / total
+    return w_new, True
+
+
 def optimise_adaptive(train_data, k):
     clean = np.nan_to_num(train_data, nan=0.0)
     mean_r = clean.mean(axis=0)
@@ -247,59 +429,40 @@ def generate_portfolio(portfolio_value_gbp, min_position_value=None,
     # Compute conditioning signals
     train_data = rets_valid.values
 
-    # Dispersion (last 63 days)
-    disp_window = train_data[-DISP_LOOKBACK:]
-    disp_clean = np.nan_to_num(disp_window, nan=0.0)
-    stock_rets = (1 + disp_clean).prod(axis=0) - 1
-    current_disp = float(stock_rets.std())
+    # Winsorise daily returns (v3: median method, threshold 0.15)
+    train_data = apply_winsorization(train_data, WINSOR_THRESHOLD)
+
+    # Dispersion (last DISP_LOOKBACK days, cross-sectional std of period sums)
+    disp_window = rets_valid.iloc[-DISP_LOOKBACK:].sum(axis=0)
+    current_disp = float(disp_window.std())
 
     # Use target_disp from historical config
-    target_disp = historical_data.get('config', {}).get('target_disp', 0.0996)
+    target_disp = historical_data.get('config', {}).get('target_disp', 0.1247)
     disp_ratio = current_disp / target_disp if target_disp > 0 else 1.0
     disp_scale = max(DISP_FLOOR, min(DISP_CAP, disp_ratio))
 
-    # Rate change (FRED)
-    rate_chg = 0.0
-    spread_elev = False
-    try:
-        import pandas_datareader as pdr
-        ff = pdr.DataReader('DFF', 'fred',
-                            (end - timedelta(days=400)).strftime('%Y-%m-%d'),
-                            end.strftime('%Y-%m-%d'))['DFF']
-        cs = pdr.DataReader('BAMLH0A0HYM2', 'fred',
-                            (end - timedelta(days=30)).strftime('%Y-%m-%d'),
-                            end.strftime('%Y-%m-%d'))['BAMLH0A0HYM2']
-        ff_now = ff.dropna().iloc[-1]
-        ff_past = ff.loc[:end - pd.DateOffset(months=RATE_LOOKBACK)].dropna().iloc[-1]
-        rate_chg = float(ff_now - ff_past)
-        current_spread = float(cs.dropna().iloc[-1])
-        spread_median = historical_data.get('config', {}).get('spread_median', 4.54)
-        spread_elev = current_spread > spread_median * SPREAD_THRESHOLD
-    except Exception as e:
-        print(f"FRED fetch failed: {e}")
-        current_spread = 4.0
-
-    # Compute k
+    # Compute k - dispersion-adaptive only (rate / blend / dampener
+    # mechanisms disabled in v3, see sf_0_90.json: rate_strength=0,
+    # blend_enabled=False, dampener_enabled=False)
     disp_k = ADAPT_STRENGTH * (1.0 - disp_scale)
-    rate_signal = max(0, rate_chg) / 2.0
-    rate_k = RATE_STRENGTH * rate_signal
-    k = 1.0 + disp_k + rate_k
-    k = min(k, 3.0)
+    k = 1.0 + disp_k
+    k = min(k, K_MAX)
 
-    # Optimise
+    # Optimise (with max_weight=0.2 cap per v3)
     print(f"Optimising with k={k:.2f}...")
     if k > 1.001:
         weights = optimise_adaptive(train_data, k)
     else:
         weights = optimise_sharpe(train_data)
 
-    # Credit gate blend
-    blend = 0.0
-    if rate_chg < 0 and spread_elev:
-        blend = min(1.0, abs(rate_chg) / 2.0)
-        eq_weights = np.full(len(valid_tickers), 1.0 / len(valid_tickers))
-        weights = (1 - blend) * weights + blend * eq_weights
-
+    # Sector floor (v3: sf=0.9). Requires sector_cache.json; if absent,
+    # the floor is skipped with a notice in the response.
+    sector_floor_fired = False
+    sector_floor_active = bool(stock_sectors)
+    if sector_floor_active:
+        weights, sector_floor_fired = apply_sector_floor(
+            weights, valid_tickers, stock_sectors,
+            end, SECTOR_FLOOR)
     # Get current prices for share calculation
     current_prices = prices[valid_tickers].iloc[-1]
 
@@ -390,15 +553,17 @@ def generate_portfolio(portfolio_value_gbp, min_position_value=None,
     invested_gbp = invested_usd / fx_rate
     cash_gbp = portfolio_value_gbp - invested_gbp
 
-    # Determine regime label
-    if blend > 0.1:
-        regime = "DEFENSIVE (blended toward equal weight)"
+    # Determine regime label (k-based; sector floor adds annotation)
+    if k > 2.0:
+        regime = "HIGHLY CONCENTRATED (k > 2)"
     elif k > 1.2:
         regime = "CONCENTRATED (adaptive k active)"
     elif k > 1.05:
         regime = "TILTED (mild concentration)"
     else:
         regime = "NEUTRAL (standard optimisation)"
+    if sector_floor_fired:
+        regime += " | sector floor pulled deficit sectors up"
 
     # Next rebalance date
     next_rebalance = (end + timedelta(days=63)).strftime('%Y-%m-%d')
@@ -414,10 +579,9 @@ def generate_portfolio(portfolio_value_gbp, min_position_value=None,
         'cash_gbp': cash_gbp,
         'cash_usd': cash_usd,
         'k': k,
-        'blend': blend,
         'disp_ratio': disp_ratio,
-        'rate_chg': rate_chg,
-        'spread': current_spread,
+        'sector_floor_active': sector_floor_active,
+        'sector_floor_fired': sector_floor_fired,
         'regime': regime,
         'rebalance_date': end.strftime('%Y-%m-%d'),
         'next_rebalance': next_rebalance,
@@ -770,7 +934,7 @@ HTML_TEMPLATE = """
       <div class="subtitle">Adaptive Sharpe optimisation with regime detection</div>
     </div>
     <div class="subtitle">
-      {{ historical.summary.alpha_ew_mean * 100 | round(2) if historical.summary }}% alpha
+      +{{ (historical.summary.alpha_spy_mean * 100) | round(2) if historical.summary }}% alpha vs SPY
       &middot; backtested 2005-2026
     </div>
   </header>
@@ -791,7 +955,7 @@ HTML_TEMPLATE = """
         <h3>What this does</h3>
         <p>This tool picks a portfolio of stocks designed to grow your money
         more steadily than buying the whole market. It looks at the largest
-        ~800 US companies, analyses how they have moved together over the
+        ~520 US companies, analyses how they have moved together over the
         past several months, and chooses the combination that has the best
         balance of growth and safety.</p>
         <p>The portfolio is updated every 3 months. You enter how much money
@@ -802,124 +966,158 @@ HTML_TEMPLATE = """
         <h3>How the model works</h3>
         <p>The optimiser maximises the portfolio's risk-adjusted return
         (the Sharpe ratio) by finding stock weightings where expected
-        return is highest relative to volatility. It uses Ledoit-Wolf
-        covariance shrinkage to stabilise the estimate.</p>
-        <p>It then adapts based on market conditions: when stocks are
-        moving uniformly (low dispersion), it concentrates more aggressively;
-        when credit spreads widen and rates fall (signalling crisis), it
-        blends toward equal weight as a defensive measure.</p>
+        return is highest relative to volatility. It uses Ledoit&ndash;Wolf
+        covariance shrinkage to stabilise the estimate and caps individual
+        positions at 20% of the portfolio.</p>
+        <p>It then adapts based on market conditions: when cross-sectional
+        return dispersion is low (stocks moving uniformly), it backs off
+        toward Sharpe-neutral weights; when dispersion is high, it
+        concentrates more aggressively into the optimiser's preferred names.
+        A pre-registered sector floor then constrains each portfolio sector
+        to at least 90% of SPY's sector weight, limiting structural
+        concentration risk.</p>
       </div>
     </div>
 
-    <div class="section-title">Headline Performance (vs Equal-Weight Benchmark)</div>
+    <div class="section-title">Headline Performance</div>
     <div class="grid">
       <div class="card">
-        <div class="card-label">Annual Alpha</div>
+        <div class="card-label">Alpha vs SPY</div>
         <div class="card-value positive">
-          +{{ (historical.summary.alpha_ew_mean * 100) | round(2) if historical.summary }}%
+          +{{ (historical.summary.alpha_spy_mean * 100) | round(2) }}%
         </div>
         <div class="card-sublabel">
-          &plusmn; {{ (historical.summary.alpha_ew_std * 100) | round(2) if historical.summary }}%
-          across {{ historical.summary.n_offsets if historical.summary }} offsets
+          Newey&ndash;West <i>t</i> = {{ historical.summary.nw_t | round(2) }} &middot;
+          <i>p</i> = {{ '%.3f' % historical.summary.nw_p }} &middot;
+          IR {{ historical.summary.information_ratio | round(2) }}
         </div>
       </div>
       <div class="card">
-        <div class="card-label">Portfolio Sharpe</div>
+        <div class="card-label">Sharpe Ratio</div>
         <div class="card-value positive">
-          {{ portfolio_sharpe | round(2) }}
+          {{ historical.summary.portfolio_sharpe | round(2) }}
         </div>
         <div class="card-sublabel">
-          vs SPY {{ spy_sharpe | round(2) }} &middot; vs EW {{ ew_sharpe | round(2) }}
+          vs SPY {{ historical.summary.spy_sharpe | round(2) }}
+          &middot; excess +{{ historical.summary.excess_sharpe | round(2) }}
         </div>
       </div>
       <div class="card">
-        <div class="card-label">Worst-Case Alpha Floor</div>
+        <div class="card-label">63-Offset Robustness</div>
         <div class="card-value positive">
-          +{{ (historical.summary.floor_ew * 100) | round(2) if historical.summary }}%
+          63 / 63 positive
         </div>
-        <div class="card-sublabel">Bottom 2.5% of outcomes</div>
+        <div class="card-sublabel">
+          min +{{ (historical.summary.alpha_spy_min * 100) | round(2) }}%
+          &middot; max +{{ (historical.summary.alpha_spy_max * 100) | round(2) }}%
+        </div>
       </div>
+      <div class="card">
+        <div class="card-label">Factor-Orthogonal Alpha</div>
+        <div class="card-value positive">
+          +{{ (historical.summary.ff6_alpha * 100) | round(2) }}%
+        </div>
+        <div class="card-sublabel">
+          Fama&ndash;French 6-factor &middot;
+          <i>t</i> = {{ historical.summary.ff6_t | round(2) }}
+        </div>
+      </div>
+    </div>
+
+    <div class="section-title">Risk &amp; Returns</div>
+    <div class="grid">
       <div class="card">
         <div class="card-label">Annual Return</div>
         <div class="card-value positive">
-          +{{ (historical.summary.portfolio_ann_mean * 100) | round(2) if historical.summary }}%
+          +{{ (historical.summary.portfolio_ann_mean * 100) | round(2) }}%
         </div>
         <div class="card-sublabel">
-          vs SPY +{{ (historical.summary.spy_ann_mean * 100) | round(2) if historical.summary }}%
+          vs SPY +{{ (historical.summary.spy_ann_mean * 100) | round(2) }}%
         </div>
-      </div>
-    </div>
-
-    <div class="section-title">Performance vs S&P 500 (SPY)</div>
-    <div class="grid">
-      <div class="card">
-        <div class="card-label">Annual Alpha vs SPY</div>
-        <div class="card-value positive">
-          +{{ (historical.summary.alpha_spy_mean * 100) | round(2) if historical.summary }}%
-        </div>
-        <div class="card-sublabel">
-          &plusmn; {{ (historical.summary.alpha_spy_std * 100) | round(2) if historical.summary }}%
-        </div>
-      </div>
-      <div class="card">
-        <div class="card-label">Cumulative Alpha vs SPY</div>
-        <div class="card-value positive">
-          +{{ (historical.summary.alpha_spy_cum_mean * 100) | round(0) if historical.summary }}%
-        </div>
-        <div class="card-sublabel">Extra return since 2005 vs holding SPY</div>
       </div>
       <div class="card">
         <div class="card-label">Cumulative Return</div>
         <div class="card-value positive">
-          +{{ (historical.summary.portfolio_cum_mean * 100) | round(0) if historical.summary }}%
+          +{{ (historical.summary.portfolio_cum_mean * 100) | round(0) }}%
         </div>
         <div class="card-sublabel">
-          If you'd followed this since 2005 (vs SPY +{{ (historical.summary.spy_cum_mean * 100) | round(0) if historical.summary }}%)
+          2005&ndash;2026 vs SPY +{{ (historical.summary.spy_cum_mean * 100) | round(0) }}%
         </div>
       </div>
       <div class="card">
-        <div class="card-label">Floor vs SPY</div>
-        <div class="card-value {% if historical.summary.floor_spy > 0 %}positive{% else %}negative{% endif %}">
-          {{ '+' if historical.summary.floor_spy > 0 else '' }}{{ (historical.summary.floor_spy * 100) | round(2) if historical.summary }}%
+        <div class="card-label">Max Drawdown</div>
+        <div class="card-value">
+          {{ (historical.summary.port_max_dd * 100) | round(1) }}%
         </div>
-        <div class="card-sublabel">Worst-case alpha vs SPY</div>
+        <div class="card-sublabel">
+          vs SPY {{ (historical.summary.spy_max_dd * 100) | round(1) }}%
+          &middot; recovery {{ historical.summary.port_recovery_years }}y vs {{ historical.summary.spy_recovery_years }}y
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-label">Sortino Ratio</div>
+        <div class="card-value positive">
+          {{ historical.summary.sortino | round(2) }}
+        </div>
+        <div class="card-sublabel">
+          vs SPY {{ historical.summary.spy_sortino | round(2) }} &middot;
+          tracking error {{ (historical.summary.tracking_error * 100) | round(2) }}%
+        </div>
       </div>
     </div>
 
-    {% if historical.eras %}
-    <div class="section-title">Performance by Market Era</div>
+    {% if historical.subsamples %}
+    <div class="section-title">Sub-sample Stability (Alpha vs SPY)</div>
     <table>
       <thead>
         <tr>
-          <th>Era</th>
-          <th>Portfolio</th>
-          <th>EqWt</th>
-          <th>SPY</th>
-          <th>&alpha; vs EW</th>
-          <th>&alpha; vs SPY</th>
-          <th>Sharpe</th>
+          <th>Sub-sample</th>
+          <th>Alpha</th>
+          <th>Sub-sample</th>
+          <th>Alpha</th>
         </tr>
       </thead>
       <tbody>
-        {% for era_name, era in historical.eras.items() %}
         <tr>
-          <td>{{ era_name }}</td>
-          <td class="{% if era.port_ann > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if era.port_ann > 0 else '' }}{{ (era.port_ann * 100) | round(2) }}%
+          <td>First half (2005&ndash;2015)</td>
+          <td class="positive">+{{ (historical.subsamples.first_half * 100) | round(2) }}%</td>
+          <td>Second half (2015&ndash;2026)</td>
+          <td class="positive">+{{ (historical.subsamples.second_half * 100) | round(2) }}%</td>
+        </tr>
+        <tr>
+          <td>Pre-2015</td>
+          <td class="positive">+{{ (historical.subsamples.pre_2015 * 100) | round(2) }}%</td>
+          <td>Post-2015</td>
+          <td class="positive">+{{ (historical.subsamples.post_2015 * 100) | round(2) }}%</td>
+        </tr>
+        <tr>
+          <td>High-SPY periods</td>
+          <td class="positive">+{{ (historical.subsamples.high_spy * 100) | round(2) }}%</td>
+          <td>Low-SPY periods</td>
+          <td class="positive">+{{ (historical.subsamples.low_spy * 100) | round(2) }}%</td>
+        </tr>
+      </tbody>
+    </table>
+    {% endif %}
+
+    {% if historical.cost_sensitivity %}
+    <div class="section-title">Transaction-Cost Sensitivity</div>
+    <table>
+      <thead>
+        <tr>
+          <th>Cost per trade (bps)</th>
+          <th>Net alpha vs SPY</th>
+          <th>Cost drag</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in historical.cost_sensitivity %}
+        <tr>
+          <td>{{ row.bps }}{% if row.bps == 20 %} (backtest baseline){% endif %}</td>
+          <td class="{% if row.net_alpha > 0 %}positive{% else %}negative{% endif %}">
+            {{ '+' if row.net_alpha >= 0 else '' }}{{ (row.net_alpha * 100) | round(2) }}%
           </td>
-          <td class="{% if era.ew_ann > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if era.ew_ann > 0 else '' }}{{ (era.ew_ann * 100) | round(2) }}%
-          </td>
-          <td class="{% if era.spy_ann > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if era.spy_ann > 0 else '' }}{{ (era.spy_ann * 100) | round(2) }}%
-          </td>
-          <td class="{% if era.alpha_ew > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if era.alpha_ew > 0 else '' }}{{ (era.alpha_ew * 100) | round(2) }}%
-          </td>
-          <td class="{% if era.alpha_spy > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if era.alpha_spy > 0 else '' }}{{ (era.alpha_spy * 100) | round(2) }}%
-          </td>
-          <td class="neutral">{{ era.port_sharpe | round(2) }}</td>
+          <td class="neutral">{{ (row.cost_drag * 100) | round(2) }}%</td>
         </tr>
         {% endfor %}
       </tbody>
@@ -927,15 +1125,13 @@ HTML_TEMPLATE = """
     {% endif %}
 
     {% if historical.years %}
-    <div class="section-title">Year by Year</div>
+    <div class="section-title">Year by Year (Alpha vs SPY)</div>
     <table>
       <thead>
         <tr>
           <th>Year</th>
           <th>Portfolio</th>
-          <th>EqWt</th>
           <th>SPY</th>
-          <th>&alpha; vs EW</th>
           <th>&alpha; vs SPY</th>
         </tr>
       </thead>
@@ -946,14 +1142,8 @@ HTML_TEMPLATE = """
           <td class="{% if yr.port > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if yr.port > 0 else '' }}{{ (yr.port * 100) | round(2) }}%
           </td>
-          <td class="{% if yr.ew > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if yr.ew > 0 else '' }}{{ (yr.ew * 100) | round(2) }}%
-          </td>
           <td class="{% if yr.spy > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if yr.spy > 0 else '' }}{{ (yr.spy * 100) | round(2) }}%
-          </td>
-          <td class="{% if yr.alpha_ew > 0 %}positive{% else %}negative{% endif %}">
-            {{ '+' if yr.alpha_ew > 0 else '' }}{{ (yr.alpha_ew * 100) | round(2) }}%
           </td>
           <td class="{% if yr.alpha_spy > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if yr.alpha_spy > 0 else '' }}{{ (yr.alpha_spy * 100) | round(2) }}%
@@ -970,7 +1160,7 @@ HTML_TEMPLATE = """
 
       <div class="chart-wrapper">
         <div class="chart-title">
-          Wealth curve since 2005 &mdash; Portfolio vs SPY vs Equal-Weight
+          Wealth curve since 2005 &mdash; Portfolio vs SPY
           <span class="scale-tag">Log scale</span>
         </div>
         <div class="chart-sub">
@@ -991,10 +1181,10 @@ HTML_TEMPLATE = """
         </div>
         <div class="chart-sub">
           Each light-green line is a backtest run with a different rebalance
-          start day. SPY (blue) and Equal-Weight (amber) reference lines use
-          the median offset. Tight bundling above both benchmarks evidences
-          robustness to rebalance-timing effects: all 63 offsets remain
-          positive vs SPY and vs equal-weight.
+          start day. The bold green line is the median offset's wealth curve;
+          the blue line is SPY (from the same offset for date alignment).
+          Tight bundling above SPY evidences robustness to rebalance-timing
+          effects &mdash; all 63 offsets remain positive vs SPY.
         </div>
         <div class="chart-canvas-box">
           <canvas id="chart-fan"></canvas>
@@ -1122,7 +1312,7 @@ function renderPortfolio(data, container) {
       <div class="card">
         <div class="card-label">Concentration (k)</div>
         <div class="card-value neutral">${data.k.toFixed(2)}</div>
-        <div class="card-sublabel">Blend: ${(data.blend * 100).toFixed(1)}%</div>
+        <div class="card-sublabel">Max 3.0 &middot; dispersion-adaptive</div>
       </div>
       <div class="card">
         <div class="card-label">Next Rebalance</div>
@@ -1136,19 +1326,17 @@ function renderPortfolio(data, container) {
       <div class="card">
         <div class="card-label">Dispersion Ratio</div>
         <div class="card-value neutral">${data.disp_ratio.toFixed(2)}x</div>
-        <div class="card-sublabel">${data.disp_ratio > 1 ? 'High (diverse)' : 'Low (uniform)'}</div>
+        <div class="card-sublabel">${data.disp_ratio > 1 ? 'High &mdash; concentrating' : 'Low &mdash; backing off'}</div>
       </div>
       <div class="card">
-        <div class="card-label">6mo Rate Change</div>
-        <div class="card-value ${data.rate_chg >= 0 ? 'positive' : 'negative'}">
-          ${data.rate_chg >= 0 ? '+' : ''}${data.rate_chg.toFixed(2)}%
-        </div>
-        <div class="card-sublabel">Fed funds direction</div>
+        <div class="card-label">Sector Floor</div>
+        <div class="card-value neutral">${data.sector_floor_active ? (data.sector_floor_fired ? 'Active &middot; fired' : 'Active &middot; inactive') : 'Off'}</div>
+        <div class="card-sublabel">${data.sector_floor_active ? '&ge; 90% of SPY sector weights' : 'sector_cache.json not loaded'}</div>
       </div>
       <div class="card">
-        <div class="card-label">Credit Spread</div>
-        <div class="card-value neutral">${data.spread.toFixed(2)}%</div>
-        <div class="card-sublabel">HY vs Treasury</div>
+        <div class="card-label">Universe</div>
+        <div class="card-value neutral">${data.universe_size}</div>
+        <div class="card-sublabel">eligible stocks (coverage &ge; 95%)</div>
       </div>
     </div>
 
@@ -1477,7 +1665,6 @@ function buildHeadlineChart() {
       datasets: [
         mk('Portfolio', h.portfolio_cum, '#4ade80'),
         mk('SPY',       h.spy_cum,       '#60a5fa'),
-        mk('Equal-Wt',  h.ew_cum,        '#f59e0b'),
       ],
     },
     options: {
@@ -1562,19 +1749,6 @@ function buildFanChart() {
     });
   }
 
-  // Equal-Weight reference line (from median offset)
-  if (ref && ref.ew_cum) {
-    fanDatasets.push({
-      label: 'Equal-Wt',
-      data: ref.dates.map((d, j) => ({ x: tsFor(d), y: ref.ew_cum[j] })),
-      borderColor: '#f59e0b',
-      borderWidth: 2,
-      pointRadius: 0,
-      tension: 0.1,
-      order: 2,
-    });
-  }
-
   // Median portfolio line on top
   fanDatasets.push({
     label: 'Portfolio (median offset)',
@@ -1646,33 +1820,10 @@ if (document.readyState === 'loading') {
 # ============================================================
 @app.route('/')
 def index():
-    # Compute average Sharpe ratios across eras (weighted by period count)
-    portfolio_sharpe = 0
-    spy_sharpe = 0
-    ew_sharpe = 0
-
-    if historical_data and 'eras' in historical_data:
-        eras = historical_data['eras']
-        total_n = sum(e.get('n', 0) for e in eras.values())
-        if total_n > 0:
-            portfolio_sharpe = sum(
-                e.get('port_sharpe', 0) * e.get('n', 0)
-                for e in eras.values()) / total_n
-
-            # SPY and EW Sharpes need to be computed from era data
-            # Use a simple average if not in primary.json
-            spy_sharpe = historical_data.get('summary', {}).get(
-                'spy_sharpe', 0.86)
-            ew_sharpe = historical_data.get('summary', {}).get(
-                'ew_sharpe', 0.87)
-
     return render_template_string(
         HTML_TEMPLATE,
         historical=historical_data,
         charts=charts_data,
-        portfolio_sharpe=portfolio_sharpe,
-        spy_sharpe=spy_sharpe,
-        ew_sharpe=ew_sharpe,
     )
 
 @app.route('/api/generate', methods=['POST'])
