@@ -4,11 +4,11 @@ An independent quantitative research project: a systematic long-only US-equity p
 
 The strategy combines a Sharpe-objective mean-variance optimiser with a dispersion-adaptive concentration mechanism and a pre-registered sector-floor risk constraint, conditioned on macro-regime signals. It produces **+6.96% annualised alpha vs SPY** that is statistically significant (Newey–West *t* = 3.19, *p* = 0.001), factor-orthogonal under Fama–French 6-factor (*α* = +19.69%, *t* = 5.69), and positive in every one of 63 tested quarterly rebalance start-days across a 21-year backtest.
 
-![Performance Dashboard](docs/dashboard.png)
+![Performance Dashboard](docs/dashboard1.png)
 
-![Cumulative Performance Charts](docs/charts.png)
+![Cumulative Performance Charts](docs/charts1.png)
 
-![Portfolio Generation](docs/portfolio.png)
+![Portfolio Generation](docs/portfolio1.png)
 
 ---
 
