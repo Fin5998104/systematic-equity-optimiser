@@ -1,11 +1,22 @@
 {
+  "_meta": {
+    "config_id": "tilt_weight_lgb_score_lam0.75_n63_sf1_unified_panel_v10_lgb8_novol",
+    "description": "Production: conservative tilt lambda=0.75, LightGBM 8-feature cross-sectional score applied as post-optimisation weight tilt, sector floor sf=1.0 (exact sector-neutrality).",
+    "cost_convention": "Costs quoted in bps PER LEG. Backtest baseline is 10bps per leg = 20bps round-trip. This assumption is unchanged from earlier versions of this project; only the labelling convention has been corrected.",
+    "benchmark_note": "EW = equal-weight portfolio of the same eligible universe.",
+    "cumulative_convention": "portfolio_cum / spy_cum in charts.json store WEALTH MULTIPLES (1.0 = start). median_offset_final_wealth 40.724064 = 40.72x = +3,972% cumulative return. Cross-offset *_cum_mean fields store cumulative RETURNS as decimals (42.458 = +4,245.8%). Median-offset and cross-offset figures are different statistics and must not be mixed."
+  },
   "config": {
     "objective": "sharpe",
+    "tilt_lambda": 0.75,
+    "tilt_mode": "post_optimisation_weight_tilt",
+    "signal": "lgb_cross_sectional_score_8feature",
+    "sector_floor": 1.0,
     "max_weight": 0.2,
     "min_coverage": 0.95,
     "min_stocks": 20,
     "cost_per_trade": 0.001,
-    "n_workers": 20,
+    "cost_convention": "per_leg",
     "skip_days": 21,
     "disp_lookback": 63,
     "k_max": 3.0,
@@ -15,213 +26,361 @@
     "n_offsets": 63,
     "winsor_method": "median",
     "winsor_threshold": 0.15,
-    "sector_floor": 0.9,
-    "b1_enabled": false,
-    "b1_threshold": 3.0,
     "target_disp": 0.12471244484186172,
     "spread_median": 1.0
   },
   "summary": {
     "n_offsets": 63,
-    "n_periods": 84,
-    "portfolio_ann_mean": 0.1750249986147064,
-    "portfolio_ann_std": 0.015933452307820065,
-    "spy_ann_mean": 0.10658669215043169,
-    "alpha_spy_mean": 0.0696148547629942,
-    "alpha_spy_std": 0.014966133544174464,
-    "alpha_spy_min": 0.04101120719769318,
-    "alpha_spy_max": 0.09661501309369874,
-    "alpha_spy_sharpe_cross": 4.651492288072736,
+    "n_periods": 85,
+    "n_obs": 5304,
+    "alpha_spy_mean": 0.0896,
+    "alpha_spy_std": 0.0177,
+    "alpha_spy_min": 0.0454,
+    "alpha_spy_max": 0.1277,
+    "alpha_spy_xs_lo": 0.0542,
+    "alpha_spy_xs_hi": 0.1236,
     "all_positive_spy": true,
-    "portfolio_cum_mean": 29.971638148682644,
-    "portfolio_cum_median": 29.633845428653153,
-    "portfolio_cum_min": 17.465873652983753,
-    "portfolio_cum_max": 48.93961934320564,
-    "spy_cum_mean": 7.435467909873009,
-    "portfolio_sharpe": 1.176,
-    "portfolio_sharpe_lo": 0.534,
-    "portfolio_sharpe_hi": 2.01,
+    "mean_alpha_per_period": 0.02284,
+    "nw_t": 3.814,
+    "nw_p": 0.0001,
+    "nw_se": 0.005989,
+    "nw_lag": 3,
+    "boot_ts_alpha": 0.0914,
+    "boot_ts_alpha_lo": 0.045,
+    "boot_ts_alpha_hi": 0.1418,
+    "portfolio_ann_mean": 0.2058,
+    "portfolio_ann_lo": 0.1089,
+    "portfolio_ann_hi": 0.2996,
+    "spy_ann_mean": 0.10658669215043169,
+    "portfolio_sharpe": 1.186,
+    "portfolio_sharpe_lo": 0.579,
+    "portfolio_sharpe_hi": 1.997,
+    "portfolio_sharpe_xs_lo": 0.756,
+    "portfolio_sharpe_xs_hi": 1.072,
     "spy_sharpe": 0.978,
-    "excess_sharpe": 0.198,
-    "information_ratio": 0.877,
-    "information_ratio_lo": 0.418,
-    "information_ratio_hi": 1.312,
-    "tracking_error": 0.08310000000000001,
-    "nw_t": 3.188,
-    "nw_p": 0.0014,
-    "boot_ts_alpha": 0.0729,
-    "boot_ts_alpha_lo": 0.0281,
-    "boot_ts_alpha_hi": 0.1116,
-    "port_max_dd": -0.4224,
+    "excess_sharpe": 0.208,
+    "information_ratio": 0.988,
+    "information_ratio_lo": 0.547,
+    "information_ratio_hi": 1.429,
+    "tracking_error": 0.0925,
+    "sortino": 1.077,
+    "spy_sortino": 0.686,
+    "cvar_5": -0.147,
+    "skew": -0.433,
+    "excess_kurtosis": 4.016,
+    "port_max_dd": -0.4281,
     "spy_max_dd": -0.4397,
+    "dd_duration_years": 1.25,
     "port_recovery_years": 1.75,
     "spy_recovery_years": 3.0,
-    "sortino": 1.005,
-    "spy_sortino": 0.686,
-    "cvar_5": null,
-    "ff3_alpha": 0.15789999999999998,
-    "ff3_t": 4.24,
-    "ff6_alpha": 0.19690000000000002,
-    "ff6_t": 5.69,
-    "ff6_betas": {
-      "smb": -0.102,
-      "hml": -0.289,
-      "rmw": -0.55,
-      "mom": -0.511
+    "alpha_max_dd": -0.1014,
+    "alpha_recovery_years": 1.25,
+    "portfolio_cum_mean": 42.458,
+    "portfolio_cum_min": 14.982,
+    "portfolio_cum_max": 87.89,
+    "spy_cum_mean": 7.435,
+    "cum_alpha_all_positive": true,
+    "median_offset": 49,
+    "median_offset_final_wealth": 40.724064,
+    "median_offset_spy_final_wealth": 7.871746,
+    "ff3_alpha": 0.1777,
+    "ff3_t": 4.42,
+    "ff3_r2": 0.071,
+    "ff3_adj_r2": 0.037,
+    "ff3_betas": {
+      "mkt": 0.08,
+      "smb": -0.133,
+      "hml": -0.386
     },
-    "avg_turnover": 0.811,
-    "annualized_turnover": 3.24
+    "ff3_beta_t": {
+      "mkt": 0.58,
+      "smb": -0.51,
+      "hml": -2.44
+    },
+    "ff6_alpha": 0.2186,
+    "ff6_t": 5.88,
+    "ff6_r2": 0.296,
+    "ff6_adj_r2": 0.242,
+    "ff6_betas": {
+      "mkt": -0.074,
+      "smb": -0.545,
+      "hml": -0.413,
+      "rmw": -0.533,
+      "cma": -0.068,
+      "mom": -0.578
+    },
+    "ff6_beta_t": {
+      "mkt": -0.59,
+      "smb": -2.28,
+      "hml": -2.2,
+      "rmw": -2.08,
+      "cma": -0.22,
+      "mom": -4.43
+    },
+    "avg_turnover": 0.82,
+    "annualized_turnover": 3.28,
+    "years_positive_spy": 16,
+    "years_positive_ew": 16,
+    "years_total": 22,
+    "median_offset_cum_return": 39.724064,
+    "median_offset_spy_cum_return": 6.871746,
+    "median_offset_wealth_ratio_vs_spy": 5.173
+  },
+  "ex_2020": {
+    "_note": "Same production config with all 2020 period-observations removed. Only the metrics listed here were recomputed; IR, Sortino, drawdown and factor attribution were NOT computed ex-2020.",
+    "n_offsets": 63,
+    "n_periods": 81,
+    "n_obs": 5051,
+    "n_obs_dropped": 253,
+    "alpha_spy_mean": 0.0698,
+    "alpha_spy_std": 0.0163,
+    "alpha_spy_min": 0.0355,
+    "alpha_spy_max": 0.1064,
+    "alpha_spy_xs_lo": 0.0387,
+    "alpha_spy_xs_hi": 0.1028,
+    "all_positive_spy": true,
+    "mean_alpha_per_period": 0.018,
+    "nw_t": 3.519,
+    "nw_p": 0.0004,
+    "nw_se": 0.005114,
+    "nw_lag": 3,
+    "boot_ts_alpha": 0.072,
+    "boot_ts_alpha_lo": 0.0291,
+    "boot_ts_alpha_hi": 0.1071,
+    "portfolio_ann_mean": 0.1778,
+    "portfolio_ann_lo": 0.0862,
+    "portfolio_ann_hi": 0.2546,
+    "portfolio_sharpe": 1.137
+  },
+  "aggressive_variant": {
+    "_note": "Documented secondary variant: tilt lambda=1.35, same sf=1.0. Not the production configuration.",
+    "config_id": "tilt_weight_lgb_score_lam1.35_n63_sf1_unified_panel_v10_lgb8_novol",
+    "tilt_lambda": 1.35,
+    "sector_floor": 1.0,
+    "alpha_spy_mean": 0.1094,
+    "alpha_spy_std": 0.0252,
+    "alpha_spy_min": 0.0446,
+    "alpha_spy_max": 0.1554,
+    "all_positive_spy": true,
+    "nw_t": 3.629,
+    "nw_p": 0.0003,
+    "portfolio_sharpe": 1.172,
+    "information_ratio": 0.959,
+    "tracking_error": 0.1153,
+    "port_max_dd": -0.4281,
+    "annualized_turnover": 3.33,
+    "ff3_alpha": 0.1969,
+    "ff3_t": 4.43,
+    "ff6_alpha": 0.2363,
+    "ff6_t": 5.61,
+    "years_positive_spy": 17,
+    "years_total": 22,
+    "worst_year": 2024,
+    "worst_year_alpha": -0.1308,
+    "best_year": 2020,
+    "best_year_alpha": 1.0755
   },
   "subsamples": {
-    "first_half": 0.053899999999999997,
-    "second_half": 0.09140000000000001,
-    "pre_2015": 0.0587,
-    "post_2015": 0.08539999999999999,
-    "high_spy": 0.09609999999999999,
-    "low_spy": 0.049
+    "first_half": 0.0626,
+    "second_half": 0.1195,
+    "pre_2015": 0.0672,
+    "post_2015": 0.1128,
+    "high_spy": 0.1374,
+    "low_spy": 0.0443
   },
   "cost_sensitivity": [
     {
       "bps": 0,
-      "net_alpha": 0.0761,
+      "bps_round_trip": 0,
+      "net_alpha": 0.0947,
       "cost_drag": 0.0
     },
     {
       "bps": 5,
-      "net_alpha": 0.0745,
-      "cost_drag": 0.0016
+      "bps_round_trip": 10,
+      "net_alpha": 0.093,
+      "cost_drag": 0.0017
     },
     {
       "bps": 10,
-      "net_alpha": 0.0729,
-      "cost_drag": 0.0032
+      "bps_round_trip": 20,
+      "net_alpha": 0.0914,
+      "cost_drag": 0.0033
     },
     {
       "bps": 20,
-      "net_alpha": 0.0696,
-      "cost_drag": 0.006500000000000001
+      "bps_round_trip": 40,
+      "net_alpha": 0.0881,
+      "cost_drag": 0.0066
     },
     {
       "bps": 50,
-      "net_alpha": 0.0599,
-      "cost_drag": 0.016200000000000003
+      "bps_round_trip": 100,
+      "net_alpha": 0.0783,
+      "cost_drag": 0.0164
     },
     {
       "bps": 100,
-      "net_alpha": 0.0437,
-      "cost_drag": 0.032400000000000005
+      "bps_round_trip": 200,
+      "net_alpha": 0.0619,
+      "cost_drag": 0.0328
     }
   ],
   "years": {
+    "_note": "2026 is year-to-date. Alpha columns are arithmetic differences of the annual figures.",
     "2005": {
-      "port": 0.1635,
+      "port": 0.1563,
+      "ew": 0.1543,
       "spy": 0.0968,
-      "alpha_spy": 0.0666
+      "alpha_ew": 0.002,
+      "alpha_spy": 0.0595
     },
     "2006": {
-      "port": 0.0621,
+      "port": 0.062,
+      "ew": 0.1489,
       "spy": 0.1324,
-      "alpha_spy": -0.0703
+      "alpha_ew": -0.0869,
+      "alpha_spy": -0.0704
     },
     "2007": {
-      "port": -0.039900000000000005,
+      "port": -0.0366,
+      "ew": -0.069,
       "spy": -0.0332,
-      "alpha_spy": -0.0067
+      "alpha_ew": 0.0324,
+      "alpha_spy": -0.0034
     },
     "2008": {
-      "port": -0.3488,
-      "spy": -0.38380000000000003,
-      "alpha_spy": 0.035
+      "port": -0.3552,
+      "ew": -0.3816,
+      "spy": -0.3838,
+      "alpha_ew": 0.0264,
+      "alpha_spy": 0.0286
     },
     "2009": {
-      "port": 0.6618999999999999,
+      "port": 0.6978,
+      "ew": 0.7414,
       "spy": 0.4382,
-      "alpha_spy": 0.2237
+      "alpha_ew": -0.0436,
+      "alpha_spy": 0.2596
     },
     "2010": {
-      "port": 0.2194,
+      "port": 0.2163,
+      "ew": 0.2478,
       "spy": 0.1858,
-      "alpha_spy": 0.0336
+      "alpha_ew": -0.0316,
+      "alpha_spy": 0.0304
     },
     "2011": {
-      "port": 0.0582,
-      "spy": 0.06309999999999999,
-      "alpha_spy": -0.005
+      "port": 0.0657,
+      "ew": 0.0511,
+      "spy": 0.0631,
+      "alpha_ew": 0.0146,
+      "alpha_spy": 0.0025
     },
     "2012": {
-      "port": 0.2004,
+      "port": 0.2054,
+      "ew": 0.1708,
       "spy": 0.1539,
-      "alpha_spy": 0.04650000000000001
+      "alpha_ew": 0.0346,
+      "alpha_spy": 0.0515
     },
     "2013": {
-      "port": 0.5466,
+      "port": 0.583,
+      "ew": 0.2719,
       "spy": 0.2357,
-      "alpha_spy": 0.3109
+      "alpha_ew": 0.3111,
+      "alpha_spy": 0.3472
     },
     "2014": {
-      "port": 0.1985,
+      "port": 0.2391,
+      "ew": 0.1508,
       "spy": 0.1466,
-      "alpha_spy": 0.0518
+      "alpha_ew": 0.0883,
+      "alpha_spy": 0.0925
     },
     "2015": {
-      "port": -0.0674,
-      "spy": -0.030699999999999998,
-      "alpha_spy": -0.0368
+      "port": -0.0354,
+      "ew": -0.064,
+      "spy": -0.0307,
+      "alpha_ew": 0.0286,
+      "alpha_spy": -0.0048
     },
     "2016": {
-      "port": 0.4567,
+      "port": 0.469,
+      "ew": 0.2475,
       "spy": 0.217,
-      "alpha_spy": 0.2397
+      "alpha_ew": 0.2216,
+      "alpha_spy": 0.2521
     },
     "2017": {
-      "port": 0.318,
+      "port": 0.3797,
+      "ew": 0.1589,
       "spy": 0.1932,
-      "alpha_spy": 0.12480000000000001
+      "alpha_ew": 0.2208,
+      "alpha_spy": 0.1864
     },
     "2018": {
-      "port": -0.0009,
+      "port": 0.0657,
+      "ew": 0.0271,
       "spy": 0.033,
-      "alpha_spy": -0.0339
+      "alpha_ew": 0.0386,
+      "alpha_spy": 0.0326
     },
     "2019": {
-      "port": 0.0783,
-      "spy": 0.11900000000000001,
-      "alpha_spy": -0.0407
+      "port": 0.0827,
+      "ew": 0.0506,
+      "spy": 0.119,
+      "alpha_ew": 0.032,
+      "alpha_spy": -0.0363
     },
     "2020": {
-      "port": 0.7903,
+      "port": 1.0424,
+      "ew": 0.4393,
       "spy": 0.3475,
-      "alpha_spy": 0.4428
+      "alpha_ew": 0.6031,
+      "alpha_spy": 0.6949
     },
     "2021": {
-      "port": 0.0339,
-      "spy": 0.16210000000000002,
-      "alpha_spy": -0.1282
+      "port": 0.0612,
+      "ew": 0.1523,
+      "spy": 0.1621,
+      "alpha_ew": -0.0911,
+      "alpha_spy": -0.1009
     },
     "2022": {
-      "port": -0.039,
+      "port": -0.0491,
+      "ew": -0.0327,
       "spy": -0.0776,
-      "alpha_spy": 0.038599999999999995
+      "alpha_ew": -0.0164,
+      "alpha_spy": 0.0285
     },
     "2023": {
-      "port": 0.3529,
+      "port": 0.5612,
+      "ew": 0.1492,
       "spy": 0.2786,
-      "alpha_spy": 0.07440000000000001
+      "alpha_ew": 0.412,
+      "alpha_spy": 0.2826
     },
     "2024": {
-      "port": 0.1909,
-      "spy": 0.16879999999999998,
-      "alpha_spy": 0.022099999999999998
+      "port": 0.0997,
+      "ew": 0.1111,
+      "spy": 0.1688,
+      "alpha_ew": -0.0114,
+      "alpha_spy": -0.069
     },
     "2025": {
-      "port": 0.6259,
+      "port": 0.5035,
+      "ew": 0.1475,
       "spy": 0.1906,
-      "alpha_spy": 0.4354
+      "alpha_ew": 0.3559,
+      "alpha_spy": 0.3129
     },
     "2026": {
-      "port": 0.1358,
+      "port": 0.1019,
+      "ew": 0.0171,
       "spy": 0.0331,
-      "alpha_spy": 0.1027
+      "alpha_ew": 0.0848,
+      "alpha_spy": 0.0688
     }
   }
 }

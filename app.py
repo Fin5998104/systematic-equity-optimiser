@@ -29,7 +29,7 @@ warnings.filterwarnings('ignore')
 app = Flask(__name__)
 
 # ============================================================
-# CONFIGURATION (matches v3 production: sf_0_90.json)
+# CONFIGURATION (matches production: lam0.75 sf=1.0, unified panel v10)
 # ============================================================
 TRAIN_DAYS       = 126       # 6mo training window
 TEST_PERIOD      = 63        # quarterly rebalance
@@ -41,13 +41,85 @@ K_MAX            = 3.0       # cap on adaptive concentration
 MAX_WEIGHT       = 0.2       # 20% per-position cap
 MIN_STOCKS       = 20
 WINSOR_THRESHOLD = 0.15      # daily-return clip threshold (median method)
-SECTOR_FLOOR     = 0.9       # sf=0.90 - each sector >= 90% of SPY weight
+SECTOR_FLOOR     = 1.0       # sf=1.00 - exact sector-neutrality vs SPY
 
-# Data paths
-DASHBOARD_DIR = os.path.expanduser('~/.norgate_dashboard')
+# Data paths.
+# Dashboard JSONs are read from ~/.norgate_dashboard when that export exists
+# AND is schema-compatible with this dashboard; otherwise they fall back to
+# this file's own directory, so a fresh `git clone` renders immediately.
+#
+# The compatibility check matters: the research pipeline writes its own
+# exports to ~/.norgate_dashboard, and an export from a different pipeline
+# version can parse as valid JSON while lacking the keys this template
+# renders. Without the check that surfaces as a 500 at render time
+# (UndefinedError) rather than as a clear message at startup.
+REPO_DIR = os.path.dirname(os.path.abspath(__file__))
+_HOME_DASHBOARD = os.path.expanduser('~/.norgate_dashboard')
+
+# Keys the dashboard template dereferences. Keep in sync with HTML_TEMPLATE.
+_REQUIRED_SUMMARY_KEYS = (
+    'alpha_spy_mean', 'alpha_spy_min', 'alpha_spy_max', 'nw_t', 'nw_p',
+    'portfolio_sharpe', 'spy_sharpe', 'excess_sharpe', 'information_ratio',
+    'ff6_alpha', 'ff6_t', 'portfolio_ann_mean', 'spy_ann_mean',
+    'portfolio_cum_mean', 'spy_cum_mean', 'port_max_dd', 'spy_max_dd',
+    'port_recovery_years', 'spy_recovery_years', 'sortino', 'spy_sortino',
+    'tracking_error',
+)
+
+
+def _dashboard_incompatibilities(path):
+    """Return a list of reasons `path` is unusable, empty if it is fine."""
+    if not os.path.exists(path):
+        return ['file not found']
+    try:
+        with open(path, 'r') as fh:
+            data = json.load(fh)
+    except (ValueError, OSError) as exc:
+        return ['unreadable: %s' % exc]
+    if not isinstance(data, dict):
+        return ['top level is not an object']
+    problems = []
+    summary = data.get('summary')
+    if not isinstance(summary, dict):
+        problems.append("missing 'summary' object")
+    else:
+        missing = [k for k in _REQUIRED_SUMMARY_KEYS if k not in summary]
+        if missing:
+            problems.append('summary missing %d key(s): %s'
+                            % (len(missing), ', '.join(missing)))
+    for section in ('subsamples', 'cost_sensitivity', 'years'):
+        if section not in data:
+            problems.append("missing '%s' section" % section)
+    return problems
+
+
+def _choose_dashboard_dir():
+    home_primary = os.path.join(_HOME_DASHBOARD, 'primary.json')
+    problems = _dashboard_incompatibilities(home_primary)
+    if not problems:
+        return _HOME_DASHBOARD
+    if os.path.exists(home_primary):
+        print('Note: ignoring %s - not compatible with this dashboard:'
+              % home_primary)
+        for p in problems:
+            print('        - %s' % p)
+        print('      Falling back to the copy alongside app.py. To use the'
+              ' research export instead, re-export it or copy a compatible'
+              ' primary.json over it.')
+    return REPO_DIR
+
+
+DASHBOARD_DIR = _choose_dashboard_dir()
 PRIMARY_PATH = os.path.join(DASHBOARD_DIR, 'primary.json')
 CHARTS_PATH = os.path.join(DASHBOARD_DIR, 'charts.json')
-SECTOR_CACHE_PATH = os.path.join(DASHBOARD_DIR, 'sector_cache.json')
+# Resolved independently of DASHBOARD_DIR: the sector cache is a local
+# research artefact and is not shipped in the repo, so look in the home
+# export first and fall back to the repo dir only if a copy is placed there.
+SECTOR_CACHE_PATH = next(
+    (p for p in (os.path.join(_HOME_DASHBOARD, 'sector_cache.json'),
+                 os.path.join(REPO_DIR, 'sector_cache.json'))
+     if os.path.exists(p)),
+    os.path.join(_HOME_DASHBOARD, 'sector_cache.json'))
 USER_STATE_DIR = os.path.expanduser('~/.portfolio_optimiser')
 os.makedirs(USER_STATE_DIR, exist_ok=True)
 
@@ -79,8 +151,13 @@ if os.path.exists(SECTOR_CACHE_PATH):
     print(f"Loaded sector cache for {len(stock_sectors)} tickers "
           f"from {SECTOR_CACHE_PATH}")
 else:
-    print(f"Note: {SECTOR_CACHE_PATH} not found - live generate will run "
-          "without sector floor")
+    print("=" * 60)
+    print("WARNING: sector_cache.json not found at")
+    print(f"  {SECTOR_CACHE_PATH}")
+    print("  Live portfolio generation will run WITHOUT the sector floor.")
+    print("  The generated portfolio will NOT be sector-neutral and will")
+    print("  not match the production strategy described in the README.")
+    print("=" * 60)
 
 # ============================================================
 # UNIVERSE - S&P 500 + NASDAQ 100 current constituents
@@ -251,7 +328,8 @@ def apply_sector_floor(w, tickers, sectors_map, date, floor_frac=SECTOR_FLOOR):
         tickers: list of n ticker symbols (parallel to w)
         sectors_map: dict {ticker: sector_name}
         date: datetime for SPY weight lookup
-        floor_frac: e.g. 0.9 -> each sector >= 0.9 * SPY weight
+        floor_frac: e.g. 1.0 -> each sector >= 1.0 * SPY weight
+            (exact sector-neutrality; production setting)
 
     Returns:
         (w_new, fired): adjusted weights summing to 1, and bool
@@ -442,7 +520,7 @@ def generate_portfolio(portfolio_value_gbp, min_position_value=None,
     disp_scale = max(DISP_FLOOR, min(DISP_CAP, disp_ratio))
 
     # Compute k - dispersion-adaptive only (rate / blend / dampener
-    # mechanisms disabled in v3, see sf_0_90.json: rate_strength=0,
+    # mechanisms disabled in production, see config: rate_strength=0,
     # blend_enabled=False, dampener_enabled=False)
     disp_k = ADAPT_STRENGTH * (1.0 - disp_scale)
     k = 1.0 + disp_k
@@ -455,7 +533,7 @@ def generate_portfolio(portfolio_value_gbp, min_position_value=None,
     else:
         weights = optimise_sharpe(train_data)
 
-    # Sector floor (v3: sf=0.9). Requires sector_cache.json; if absent,
+    # Sector floor (production: sf=1.0). Requires sector_cache.json; if absent,
     # the floor is skipped with a notice in the response.
     sector_floor_fired = False
     sector_floor_active = bool(stock_sectors)
@@ -934,8 +1012,8 @@ HTML_TEMPLATE = """
       <div class="subtitle">Adaptive Sharpe optimisation with regime detection</div>
     </div>
     <div class="subtitle">
-      +{{ (historical.summary.alpha_spy_mean * 100) | round(2) if historical.summary }}% alpha vs SPY
-      &middot; backtested 2005-2026
+      {% if historical.summary %}+{{ (historical.summary.alpha_spy_mean * 100) | round(2) }}% alpha vs SPY
+      &middot; backtested 2005-2026{% else %}dashboard data not loaded{% endif %}
     </div>
   </header>
 
@@ -974,11 +1052,13 @@ HTML_TEMPLATE = """
         toward Sharpe-neutral weights; when dispersion is high, it
         concentrates more aggressively into the optimiser's preferred names.
         A pre-registered sector floor then constrains each portfolio sector
-        to at least 90% of SPY's sector weight, limiting structural
-        concentration risk.</p>
+        to at least 100% of SPY's sector weight &mdash; exact sector
+        neutrality &mdash; so stock selection, not sector betting, drives
+        returns.</p>
       </div>
     </div>
 
+    {% if historical.summary %}
     <div class="section-title">Headline Performance</div>
     <div class="grid">
       <div class="card">
@@ -1038,10 +1118,16 @@ HTML_TEMPLATE = """
       <div class="card">
         <div class="card-label">Cumulative Return</div>
         <div class="card-value positive">
-          +{{ (historical.summary.portfolio_cum_mean * 100) | round(0) }}%
+          {% if historical.summary.median_offset_cum_return is defined %}
+          +{{ (historical.summary.median_offset_cum_return * 100) | round(0) | int }}%
+          {% else %}+{{ (historical.summary.portfolio_cum_mean * 100) | round(0) | int }}%{% endif %}
         </div>
         <div class="card-sublabel">
-          2005&ndash;2026 vs SPY +{{ (historical.summary.spy_cum_mean * 100) | round(0) }}%
+          {% if historical.summary.median_offset_cum_return is defined %}
+          median-offset path &middot; vs SPY
+          +{{ (historical.summary.median_offset_spy_cum_return * 100) | round(0) | int }}%
+          {% else %}2005&ndash;2026 vs SPY
+          +{{ (historical.summary.spy_cum_mean * 100) | round(0) | int }}%{% endif %}
         </div>
       </div>
       <div class="card">
@@ -1065,6 +1151,12 @@ HTML_TEMPLATE = """
         </div>
       </div>
     </div>
+
+    {% else %}
+    <div class="section-title">Dashboard data not loaded</div>
+    <p style="color:#94a3b8">No compatible <code>primary.json</code> was found.
+    See the console output at startup for the reason.</p>
+    {% endif %}
 
     {% if historical.subsamples %}
     <div class="section-title">Sub-sample Stability (Alpha vs SPY)</div>
@@ -1105,7 +1197,7 @@ HTML_TEMPLATE = """
     <table>
       <thead>
         <tr>
-          <th>Cost per trade (bps)</th>
+          <th>Cost (bps per leg / round-trip)</th>
           <th>Net alpha vs SPY</th>
           <th>Cost drag</th>
         </tr>
@@ -1113,7 +1205,7 @@ HTML_TEMPLATE = """
       <tbody>
         {% for row in historical.cost_sensitivity %}
         <tr>
-          <td>{{ row.bps }}{% if row.bps == 20 %} (backtest baseline){% endif %}</td>
+          <td>{{ row.bps }} per leg / {{ row.bps * 2 }} round-trip{% if row.bps == 10 %} (backtest baseline){% endif %}</td>
           <td class="{% if row.net_alpha > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if row.net_alpha >= 0 else '' }}{{ (row.net_alpha * 100) | round(2) }}%
           </td>
@@ -1131,7 +1223,9 @@ HTML_TEMPLATE = """
         <tr>
           <th>Year</th>
           <th>Portfolio</th>
+          <th>Equal-Weight</th>
           <th>SPY</th>
+          <th>&alpha; vs EW</th>
           <th>&alpha; vs SPY</th>
         </tr>
       </thead>
@@ -1142,8 +1236,14 @@ HTML_TEMPLATE = """
           <td class="{% if yr.port > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if yr.port > 0 else '' }}{{ (yr.port * 100) | round(2) }}%
           </td>
+          <td class="{% if yr.ew is defined %}{% if yr.ew > 0 %}positive{% else %}negative{% endif %}{% else %}neutral{% endif %}">
+            {% if yr.ew is defined %}{{ '+' if yr.ew > 0 else '' }}{{ (yr.ew * 100) | round(2) }}%{% else %}&mdash;{% endif %}
+          </td>
           <td class="{% if yr.spy > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if yr.spy > 0 else '' }}{{ (yr.spy * 100) | round(2) }}%
+          </td>
+          <td class="{% if yr.alpha_ew is defined %}{% if yr.alpha_ew > 0 %}positive{% else %}negative{% endif %}{% else %}neutral{% endif %}">
+            {% if yr.alpha_ew is defined %}{{ '+' if yr.alpha_ew > 0 else '' }}{{ (yr.alpha_ew * 100) | round(2) }}%{% else %}&mdash;{% endif %}
           </td>
           <td class="{% if yr.alpha_spy > 0 %}positive{% else %}negative{% endif %}">
             {{ '+' if yr.alpha_spy > 0 else '' }}{{ (yr.alpha_spy * 100) | round(2) }}%
@@ -1331,7 +1431,7 @@ function renderPortfolio(data, container) {
       <div class="card">
         <div class="card-label">Sector Floor</div>
         <div class="card-value neutral">${data.sector_floor_active ? (data.sector_floor_fired ? 'Active &middot; fired' : 'Active &middot; inactive') : 'Off'}</div>
-        <div class="card-sublabel">${data.sector_floor_active ? '&ge; 90% of SPY sector weights' : 'sector_cache.json not loaded'}</div>
+        <div class="card-sublabel">${data.sector_floor_active ? '&ge; 100% of SPY sector weights' : 'sector_cache.json not loaded'}</div>
       </div>
       <div class="card">
         <div class="card-label">Universe</div>
@@ -1650,6 +1750,7 @@ function buildHeadlineChart() {
   if (!el || !chartsData || !chartsData.headline) return;
   const h = chartsData.headline;
   const xs = h.dates.map(tsFor);
+  const xMin = Math.min(...xs);
   const mk = (label, ys, color) => ({
     label: label,
     data: xs.map((x, i) => ({ x: x, y: ys[i] })),
@@ -1676,6 +1777,11 @@ function buildHeadlineChart() {
       scales: {
         x: {
           type: 'linear',
+          // Pin the axis to the first data point. Without this, Chart.js
+          // picks round numeric tick positions on a linear epoch-ms scale
+          // and renders a phantom leading tick (e.g. 2004) in the margin
+          // before the series actually starts.
+          min: xMin,
           ticks: {
             color: '#94a3b8',
             callback: (v) => new Date(v).getFullYear(),
@@ -1726,6 +1832,8 @@ function buildFanChart() {
     medianDates.push(offsets[0].dates[i]);
   }
 
+  const xMin = Math.min(...offsets.map(o => tsFor(o.dates[0])));
+
   // 63 translucent portfolio lines
   const fanDatasets = offsets.map((o) => ({
     data: o.dates.map((d, j) => ({ x: tsFor(d), y: o.portfolio_cum[j] })),
@@ -1771,6 +1879,11 @@ function buildFanChart() {
       scales: {
         x: {
           type: 'linear',
+          // Pin the axis to the first data point. Without this, Chart.js
+          // picks round numeric tick positions on a linear epoch-ms scale
+          // and renders a phantom leading tick (e.g. 2004) in the margin
+          // before the series actually starts.
+          min: xMin,
           ticks: {
             color: '#94a3b8',
             callback: (v) => new Date(v).getFullYear(),

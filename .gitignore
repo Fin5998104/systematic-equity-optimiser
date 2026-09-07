@@ -16,3 +16,11 @@ records*.pkl
 .idea/
 .DS_Store
 Thumbs.db
+
+# Data (never commit licensed vendor data)
+*.csv
+*.parquet
+*.h5
+*.hdf5
+*.feather
+data/
